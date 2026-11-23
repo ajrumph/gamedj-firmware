@@ -56,6 +56,9 @@
 #include "esp_camera.h"
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+#include <WiFiServer.h>
+void remoteLog(const String& msg);
+void checkForUpdate();
 
 // ====================== SETTINGS — CHANGE THESE ======================
 // Base44 function addresses (score-sync-dj)
@@ -65,7 +68,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.4.0";
+const char* FIRMWARE_VERSION = "1.5.0";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -271,11 +274,27 @@ long jsonNumber(const String& body, const char* key) {
   return body.substring(i).toInt();
 }
 
+// Pulls a decimal number such as 1.3 out of {"key":1.3}; returns the value in
+// milliseconds, or -1 if missing. (1.5.0: the server may now ask for sub-2-second checks.)
+long jsonSecondsAsMs(const String& body, const char* key) {
+  String needle = String("\"") + key + "\"";
+  int k = body.indexOf(needle);
+  if (k < 0) return -1;
+  int colon = body.indexOf(':', k + needle.length());
+  if (colon < 0) return -1;
+  int i = colon + 1;
+  while (i < (int)body.length() && (body[i] == ' ' || body[i] == '"')) i++;
+  if (i >= (int)body.length() || body[i] < '0' || body[i] > '9') return -1;
+  float v = body.substring(i).toFloat();
+  if (v <= 0) return -1;
+  return (long)(v * 1000.0f);
+}
+
 // How often to ask the server. The server may stretch this (steady game
 // footage) via "next_in_seconds"; clamped so a bad reply can never starve
 // or flood it. Missing field -> the original 3 s cadence.
 unsigned long snapshotIntervalMs = 3000;
-const unsigned long MIN_INTERVAL_MS = 2000, MAX_INTERVAL_MS = 12000;
+const unsigned long MIN_INTERVAL_MS = 1000, MAX_INTERVAL_MS = 12000;  // 1.5.0: floor lowered to 1 s
 
 void remoteLog(const String& msg) {
   Serial.println("[log] " + msg);
@@ -604,6 +623,89 @@ bool initCamera() {
   return true;
 }
 
+// ========================= LIVE VIEW (LAN) ===========================
+// Local video stream so the website's Live check page can open a smooth view
+// without uploading anything. Runs on core 0 (the main loop and the AI uploads
+// run on core 1) and shares the same camera. Only reachable from the home
+// network, and only with the per-boot key the unit reports to the website.
+String liveKey = "";
+WiFiServer liveServer(81);
+const unsigned long LIVE_FRAME_GAP_MS = 150;        // ~6 fps cap leaves headroom for uploads
+const unsigned long LIVE_MAX_SESSION_MS = 20UL * 60UL * 1000UL;
+
+static bool liveKeyOk(const String& reqLine) {
+  int k = reqLine.indexOf("k=");
+  if (k < 0 || liveKey.length() == 0) return false;
+  return reqLine.substring(k + 2, k + 2 + liveKey.length()) == liveKey;
+}
+
+static void liveHandle(WiFiClient& c) {
+  c.setTimeout(2);
+  unsigned long t0 = millis();
+  String line = "";
+  while (c.connected() && millis() - t0 < 2000) {          // first request line only
+    if (c.available()) {
+      char ch = c.read();
+      if (ch == '\n') break;
+      if (line.length() < 160) line += ch;
+    } else delay(2);
+  }
+  while (c.available()) c.read();                           // drop the rest of the headers
+  if (!liveKeyOk(line)) {
+    c.print("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden");
+    return;
+  }
+  if (line.indexOf("GET /stream") == 0) {
+    c.print("HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=gdjframe\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n");
+    unsigned long start = millis();
+    while (c.connected() && WiFi.status() == WL_CONNECTED && millis() - start < LIVE_MAX_SESSION_MS) {
+      unsigned long f0 = millis();
+      camera_fb_t* fb = esp_camera_fb_get();
+      if (!fb) { delay(50); continue; }
+      c.printf("--gdjframe\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", (unsigned)fb->len);
+      size_t sent = 0; unsigned long w0 = millis(); bool ok = true;
+      while (sent < fb->len) {                              // chunked so a stalled phone can't hold the camera buffer
+        size_t n = c.write(fb->buf + sent, min((size_t)1436, fb->len - sent));
+        if (n == 0) { if (millis() - w0 > 1500) { ok = false; break; } delay(2); }
+        else { sent += n; w0 = millis(); }
+      }
+      esp_camera_fb_return(fb);
+      if (!ok) break;
+      c.print("\r\n");
+      unsigned long used = millis() - f0;
+      if (used < LIVE_FRAME_GAP_MS) delay(LIVE_FRAME_GAP_MS - used);
+    }
+    return;
+  }
+  if (line.indexOf("GET /jpg") == 0) {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) { c.print("HTTP/1.1 503 Busy\r\nConnection: close\r\n\r\n"); return; }
+    c.printf("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\nConnection: close\r\n\r\n", (unsigned)fb->len);
+    c.write(fb->buf, fb->len);
+    esp_camera_fb_return(fb);
+    return;
+  }
+  // Simple page that shows the stream (open http://<unit address>:81/?k=<key>).
+  String page = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<body style='margin:0;background:#000;color:#fff;font-family:sans-serif'>"
+                "<div style='padding:8px;font-size:14px'>Game DJ live view</div>"
+                "<img style='width:100%;display:block' src='/stream?k=" + liveKey + "'></body>";
+  c.printf("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %u\r\nConnection: close\r\n\r\n", (unsigned)page.length());
+  c.print(page);
+}
+
+static void liveTask(void*) {
+  liveServer.begin();
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      WiFiClient c = liveServer.available();
+      if (c) { liveHandle(c); c.stop(); }
+    }
+    delay(20);
+  }
+}
+
 // ========================= SNAPSHOTS =================================
 void handleFailure() {
   consecutiveFailures++;
@@ -648,6 +750,8 @@ void sendSnapshot() {
   snapHttp.addHeader("X-Current-Audio", audioSource == AUDIO_MUSIC ? "music" : "tv");
   snapHttp.addHeader("X-Firmware", FIRMWARE_VERSION);
   snapHttp.addHeader("X-Board", BOARD_NAME);
+  snapHttp.addHeader("X-Local-Ip", WiFi.localIP().toString());
+  snapHttp.addHeader("X-Live-Key", liveKey);
 
   lastFrameLen = fb->len;
   int status = snapHttp.POST(fb->buf, fb->len);
@@ -667,9 +771,9 @@ void sendSnapshot() {
         remoteLog("unexpected reply: " + resp.substring(0, 160));
       }
     }
-    long nxt = jsonNumber(resp, "next_in_seconds");
-    if (nxt > 0) {
-      unsigned long ms = (unsigned long)nxt * 1000UL;
+    long nxtMs = jsonSecondsAsMs(resp, "next_in_seconds");
+    if (nxtMs > 0) {
+      unsigned long ms = (unsigned long)nxtMs;
       if (ms < MIN_INTERVAL_MS) ms = MIN_INTERVAL_MS;
       if (ms > MAX_INTERVAL_MS) ms = MAX_INTERVAL_MS;
       snapshotIntervalMs = ms;
@@ -757,6 +861,13 @@ void setup() {
     ledMode = LED_ERROR;
     delay(5000);
     ESP.restart();
+  }
+
+  {
+    char kb[17];
+    snprintf(kb, sizeof(kb), "%08X%08X", (unsigned)esp_random(), (unsigned)esp_random());
+    liveKey = kb;
+    xTaskCreatePinnedToCore(liveTask, "live", 6144, nullptr, 1, nullptr, 0);
   }
 
   tlsClient.setInsecure();       // TODO for wide release: pin Base44's root certificate
