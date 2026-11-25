@@ -68,7 +68,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.0";
+const char* FIRMWARE_VERSION = "1.5.1";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -404,11 +404,33 @@ void registerUntilDone() {
 }
 
 // ===================== WI-FI + SETUP PORTAL ==========================
+// Connection health reported to the website with every check.
+unsigned int wifiDrops = 0;          // times Wi-Fi dropped since this boot
+String resetReasonText = "unknown";  // why the board last restarted
+wifi_power_t gTxPower = WIFI_POWER_15dBm;
+bool stableMarked = false;
+
+String resetReasonName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "poweron";
+    case ESP_RST_EXT:       return "ext";
+    case ESP_RST_SW:        return "sw";
+    case ESP_RST_PANIC:     return "panic";
+    case ESP_RST_INT_WDT:   return "int_wdt";
+    case ESP_RST_TASK_WDT:  return "task_wdt";
+    case ESP_RST_WDT:       return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    default:                return "unknown";
+  }
+}
+
 void lowerTxPower() {
 #if defined(BOARD_AI_THINKER)
-  // The ESP32-CAM's Wi-Fi start-up current spike can freeze or reset the board
-  // on weak USB power. Lower transmit power = smaller spike; still fine for a room.
-  WiFi.setTxPower(WIFI_POWER_11dBm);
+  // Normal power is 15 dBm (about 1.6x the range of the old 11 dBm setting).
+  // The Wi-Fi start-up current spike can freeze or reset the board on weak
+  // power, so if the last boot died before running 2 minutes, this boot uses 11 dBm.
+  WiFi.setTxPower(gTxPower);
 #endif
 }
 
@@ -752,6 +774,10 @@ void sendSnapshot() {
   snapHttp.addHeader("X-Board", BOARD_NAME);
   snapHttp.addHeader("X-Local-Ip", WiFi.localIP().toString());
   snapHttp.addHeader("X-Live-Key", liveKey);
+  snapHttp.addHeader("X-Wifi-Rssi", String(WiFi.RSSI()));
+  snapHttp.addHeader("X-Reset-Reason", resetReasonText);
+  snapHttp.addHeader("X-Wifi-Drops", String(wifiDrops));
+  snapHttp.addHeader("X-Uptime-S", String((unsigned long)(millis() / 1000)));
 
   lastFrameLen = fb->len;
   int status = snapHttp.POST(fb->buf, fb->len);
@@ -848,6 +874,9 @@ void setup() {
   Serial.println("Step 1/4: reading saved settings");
   prefs.begin("gamedj", false);
   deviceToken = prefs.getString("token", "");
+  resetReasonText = resetReasonName(esp_reset_reason());
+  if (!prefs.getBool("stable", true)) gTxPower = WIFI_POWER_11dBm;   // last boot died early
+  prefs.putBool("stable", false);                                    // set true again after 2 min of running
 
   Serial.println("Step 2/4: checking for double reset (3 s)");
   bool forceSetup = checkDoubleReset();
@@ -876,7 +905,7 @@ void setup() {
 
   ledMode = LED_OK;
   printStatus();
-  remoteLog(String("boot ok on ") + BOARD_NAME + ", Wi-Fi " + WiFi.SSID() + " " + String(WiFi.RSSI()) + " dBm, reset reason " + String((int)esp_reset_reason()));
+  remoteLog(String("boot ok on ") + BOARD_NAME + ", Wi-Fi " + WiFi.SSID() + " " + String(WiFi.RSSI()) + " dBm, reset reason " + resetReasonText + ", tx power " + String(gTxPower == WIFI_POWER_11dBm ? "11" : "15") + " dBm");
 
   remoteLog(relayPolarityInfo);
 
@@ -915,7 +944,7 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     ledMode = LED_ERROR;
     if (audioSource != AUDIO_TV) setAudio(AUDIO_TV);
-    if (offlineSince == 0) { offlineSince = millis(); lastRejoin = millis(); }
+    if (offlineSince == 0) { offlineSince = millis(); lastRejoin = millis(); wifiDrops++; }
     // Self-heal: the Wi-Fi chip's own auto-reconnect sometimes gives up on a weak
     // signal. Re-join by hand every 25 s, and restart if still offline after 2 min.
     if (millis() - offlineSince > 120000) {
@@ -933,6 +962,7 @@ void loop() {
     return;
   }
   offlineSince = 0;
+  if (!stableMarked && millis() > 120000UL) { prefs.putBool("stable", true); stableMarked = true; }
 
   // Every 6 hours, but only during game audio (never mid-commercial).
   if (millis() - lastUpdateCheck >= UPDATE_CHECK_MS && audioSource == AUDIO_TV) {
