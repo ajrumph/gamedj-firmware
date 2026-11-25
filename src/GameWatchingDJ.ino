@@ -64,7 +64,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.5";
+const char* FIRMWARE_VERSION = "1.5.6";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -748,6 +748,8 @@ void sendSnapshot() {
   if (status == 200) {
     String resp = snapHttp.getString();
     snapHttp.end();
+    { static unsigned long lastOk = 0;
+      if (millis() - lastOk > 60000) { lastOk = millis(); remoteLog("check reply: " + resp.substring(0, 200)); } }
     String action = jsonString(resp, "action");   // expects {"action":"music"} or {"action":"tv"}
     action.toLowerCase();
     if (action == "music") setAudio(AUDIO_MUSIC);
