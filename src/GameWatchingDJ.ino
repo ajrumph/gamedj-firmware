@@ -64,7 +64,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.1";
+const char* FIRMWARE_VERSION = "1.5.2";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -618,7 +618,7 @@ const unsigned long LIVE_MAX_SESSION_MS = 20UL * 60UL * 1000UL;
 static bool liveKeyOk(const String& reqLine) {
   int k = reqLine.indexOf("k=");
   if (k < 0 || liveKey.length() == 0) return false;
-  return reqLine.substring(k + 2, k + 2 + liveKey.length()) == liveKey;
+  return reqLine.substring(k + 2, k + 2 + liveKey.length()).equalsIgnoreCase(liveKey);
 }
 
 static void liveHandle(WiFiClient& c) {
@@ -735,6 +735,8 @@ void sendSnapshot() {
   snapHttp.addHeader("X-Local-Ip", WiFi.localIP().toString());
   snapHttp.addHeader("X-Live-Key", liveKey);
   snapHttp.addHeader("X-Wifi-Rssi", String(WiFi.RSSI()));
+  { String ss = WiFi.SSID(); ss.replace("\r",""); ss.replace("\n",""); snapHttp.addHeader("X-Wifi-Ssid", ss.substring(0, 32));
+    String bs = WiFi.BSSIDstr(); snapHttp.addHeader("X-Wifi-Bssid", bs.substring(bs.length() - 8)); }
   snapHttp.addHeader("X-Reset-Reason", resetReasonText);
   snapHttp.addHeader("X-Wifi-Drops", String(wifiDrops));
   snapHttp.addHeader("X-Uptime-S", String((unsigned long)(millis() / 1000)));
