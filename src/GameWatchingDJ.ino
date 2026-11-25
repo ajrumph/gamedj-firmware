@@ -64,7 +64,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.6";
+const char* FIRMWARE_VERSION = "1.5.7";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -398,6 +398,7 @@ void lowerTxPower() {
   // power, so if the last boot died before running 2 minutes, this boot uses 11 dBm.
   WiFi.setTxPower(gTxPower);
 #endif
+  WiFi.setSleep(false);
 }
 
 void configurePortal() {
@@ -940,6 +941,8 @@ void loop() {
     return;
   }
   offlineSince = 0;
+  { static unsigned long lastPs = 0;   // radio must never nap: modem sleep drops uploads on some routers
+    if (millis() - lastPs > 10000) { lastPs = millis(); WiFi.setSleep(false); } }
 
   // Every 6 hours, but only during game audio (never mid-commercial).
   if (millis() - lastUpdateCheck >= UPDATE_CHECK_MS && audioSource == AUDIO_TV) {
