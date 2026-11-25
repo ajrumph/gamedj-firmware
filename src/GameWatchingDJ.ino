@@ -64,7 +64,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.3";
+const char* FIRMWARE_VERSION = "1.5.4";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -774,11 +774,18 @@ void sendSnapshot() {
   }
 
   snapHttp.end();
+  if (status <= 0) tlsClient.stop();   // drop a dead kept-alive socket so the next try starts clean
   Serial.printf("Snapshot failed: HTTP %d\n", status);
   static unsigned long lastFailLog = 0;
   if (millis() - lastFailLog > 60000) {
     lastFailLog = millis();
-    remoteLog("snapshot failed: HTTP " + String(status));
+    remoteLog("snapshot failed: HTTP " + String(status) + ", heap " + String(ESP.getFreeHeap()) + " max block " + String(ESP.getMaxAllocHeap()) + ", rssi " + String(WiFi.RSSI()) + ", fails " + String(consecutiveFailures + 1));
+  }
+  // Self-heal: a connection that keeps failing while Wi-Fi looks fine gets a clean restart.
+  if (status <= 0 && consecutiveFailures + 1 >= 10 && millis() > 90000UL) {
+    remoteLog("10 failed checks in a row, restarting");
+    delay(300);
+    ESP.restart();
   }
 
   if (status == 401 || status == 403) {
