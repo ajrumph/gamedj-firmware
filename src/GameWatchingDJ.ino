@@ -64,7 +64,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.4";
+const char* FIRMWARE_VERSION = "1.5.5";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -780,6 +780,20 @@ void sendSnapshot() {
   if (millis() - lastFailLog > 60000) {
     lastFailLog = millis();
     remoteLog("snapshot failed: HTTP " + String(status) + ", heap " + String(ESP.getFreeHeap()) + " max block " + String(ESP.getMaxAllocHeap()) + ", rssi " + String(WiFi.RSSI()) + ", fails " + String(consecutiveFailures + 1));
+  }
+  if (status <= 0) {
+    static unsigned long lastDiag = 0;
+    if (millis() - lastDiag > 60000) {
+      lastDiag = millis();
+      const char* host = "score-sync-dj.base44.app";
+      IPAddress ip; bool dnsOk = WiFi.hostByName(host, ip);
+      WiFiClientSecure t; t.setInsecure(); t.setTimeout(8);
+      unsigned long t0 = millis();
+      int ok = dnsOk ? t.connect(host, 443) : 0;
+      char err[100] = ""; int e = t.lastError(err, sizeof(err));
+      remoteLog(String("diag dns=") + (dnsOk ? "ok " + ip.toString() : "FAIL") + " dns-server=" + WiFi.dnsIP().toString() + " gw=" + WiFi.gatewayIP().toString() + " tls=" + String(ok) + " err=" + String(e) + " " + String(err) + " in " + String(millis() - t0) + "ms");
+      t.stop();
+    }
   }
   // Self-heal: a connection that keeps failing while Wi-Fi looks fine gets a clean restart.
   if (status <= 0 && consecutiveFailures + 1 >= 10 && millis() > 90000UL) {
