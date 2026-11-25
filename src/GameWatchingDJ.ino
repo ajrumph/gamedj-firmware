@@ -1,9 +1,7 @@
 /*
   Game Watching DJ — camera + relay firmware with phone-based Wi-Fi setup
   -------------------------------------------------------------------
-  Supports two boards. Pick one in the BOARD section below:
-    - M5Stack Timer Camera X   (relay plugs into the Grove port, no breakout board)
-    - AI Thinker ESP32-CAM     (original build)
+  Board: AI Thinker ESP32-CAM.
 
   Libraries: WiFiManager by tzapu (v2.0.17 or newer).
              Everything else ships with the ESP32 board package.
@@ -37,12 +35,10 @@
 */
 
 // ============================ BOARD =================================
-// Chosen in the flash command (no need to edit this file):
-//   M5Stack:     --build-property "compiler.cpp.extra_flags=-DBOARD_M5_TIMERCAM"
-//   ESP32-CAM:   --build-property "compiler.cpp.extra_flags=-DBOARD_AI_THINKER"
-// With no flag, it builds for the M5Stack.
-#if !defined(BOARD_M5_TIMERCAM) && !defined(BOARD_AI_THINKER)
-  #define BOARD_M5_TIMERCAM
+// The only supported board is the AI Thinker ESP32-CAM (the flash command may
+// still pass -DBOARD_AI_THINKER; without it this default applies).
+#if !defined(BOARD_AI_THINKER)
+  #define BOARD_AI_THINKER
 #endif
 // =====================================================================
 
@@ -92,36 +88,7 @@ const unsigned long DOUBLE_RESET_WINDOW_MS = 3000;
 const int           MAX_FAILURES_BEFORE_TV = 5;   // fall back to TV audio if server stops answering
 // =====================================================================
 
-#if defined(BOARD_M5_TIMERCAM)
-  const char* BOARD_NAME = "M5Stack Timer Camera X";
-  const char* BOARD_FOLDER = "m5";
-  // Grove port: both relay channels always switch together, so it doesn't
-  // matter which of the two signal wires goes to IN1 or IN2.
-  const int RELAY_PIN_L = 4;    // Grove SDA (white wire on Seeed cables)
-  const int RELAY_PIN_R = 13;   // Grove SCL (yellow wire on Seeed cables)
-  const int STATUS_LED  = 2;    // LED on the front of the case
-  const int LED_ON_LEVEL = HIGH;
-  const int FLASH_LED   = -1;   // no flash LED on this board
-  const int BAT_HOLD_PIN = 33;  // keeps the board powered when running on its battery
-
-  #define PWDN_GPIO_NUM     -1
-  #define RESET_GPIO_NUM    15
-  #define XCLK_GPIO_NUM     27
-  #define SIOD_GPIO_NUM     25
-  #define SIOC_GPIO_NUM     23
-  #define Y9_GPIO_NUM       19
-  #define Y8_GPIO_NUM       36
-  #define Y7_GPIO_NUM       18
-  #define Y6_GPIO_NUM       39
-  #define Y5_GPIO_NUM        5
-  #define Y4_GPIO_NUM       34
-  #define Y3_GPIO_NUM       35
-  #define Y2_GPIO_NUM       32
-  #define VSYNC_GPIO_NUM    22
-  #define HREF_GPIO_NUM     26
-  #define PCLK_GPIO_NUM     21
-
-#elif defined(BOARD_AI_THINKER)
+#if defined(BOARD_AI_THINKER)
   const char* BOARD_NAME = "AI Thinker ESP32-CAM";
   const char* BOARD_FOLDER = "esp32cam";
   // Avoid GPIO12 (can stop the board booting) and GPIO0/GPIO4.
@@ -130,7 +97,6 @@ const int           MAX_FAILURES_BEFORE_TV = 5;   // fall back to TV audio if se
   const int STATUS_LED  = 33;   // red LED on back of board, ON when LOW
   const int LED_ON_LEVEL = LOW;
   const int FLASH_LED   = 4;    // bright white flash LED — keep off
-  const int BAT_HOLD_PIN = -1;
 
   #define PWDN_GPIO_NUM     32
   #define RESET_GPIO_NUM    -1
@@ -636,12 +602,6 @@ bool initCamera() {
     return false;
   }
 
-  // The OV3660 sensor (M5Stack) mounts upside down; flip it so the AI sees
-  // the TV the right way up. The AI Thinker's OV2640 doesn't need this.
-  sensor_t* s = esp_camera_sensor_get();
-  if (s && s->id.PID == OV3660_PID) {
-    s->set_vflip(s, 1);
-  }
   return true;
 }
 
@@ -833,12 +793,6 @@ void sendSnapshot() {
 
 // ============================ MAIN ===================================
 void setup() {
-  // M5Stack: hold power on (needed when running from the built-in battery).
-  if (BAT_HOLD_PIN >= 0) {
-    pinMode(BAT_HOLD_PIN, OUTPUT);
-    digitalWrite(BAT_HOLD_PIN, HIGH);
-  }
-
   // Wi-Fi start-up current can trip the brown-out detector on both boards and
   // cause a reboot loop (two quick blinks repeating, no setup network).
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);

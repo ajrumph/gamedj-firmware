@@ -10,6 +10,6 @@ Each unit reads `<board>/manifest.json` at start-up and every 6 hours:
 
 If the version is newer than what it's running, it downloads the `.bin`, installs it and restarts (only while on game audio).
 
-Boards: `esp32cam` (AI Thinker ESP32-CAM) and `m5` (M5Stack Timer Camera X).
+Board: `esp32cam` (AI Thinker ESP32-CAM). The M5Stack Timer Camera is no longer supported.
 
-Releases are built on the Mac with `zsh ~/GameDJ/flash.sh <esp|m5> release` and published from Claude.
+Releases are built on the Mac with `zsh ~/GameDJ/flash.sh esp release` and published from Claude.
