@@ -64,7 +64,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.2";
+const char* FIRMWARE_VERSION = "1.5.3";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -373,7 +373,7 @@ void registerUntilDone() {
 // Connection health reported to the website with every check.
 unsigned int wifiDrops = 0;          // times Wi-Fi dropped since this boot
 String resetReasonText = "unknown";  // why the board last restarted
-wifi_power_t gTxPower = WIFI_POWER_15dBm;
+wifi_power_t gTxPower = WIFI_POWER_19_5dBm;   // full power: a weak uplink was dropping checks
 bool stableMarked = false;
 
 String resetReasonName(esp_reset_reason_t r) {
@@ -831,8 +831,7 @@ void setup() {
   prefs.begin("gamedj", false);
   deviceToken = prefs.getString("token", "");
   resetReasonText = resetReasonName(esp_reset_reason());
-  if (!prefs.getBool("stable", true)) gTxPower = WIFI_POWER_11dBm;   // last boot died early
-  prefs.putBool("stable", false);                                    // set true again after 2 min of running
+  if (esp_reset_reason() == ESP_RST_BROWNOUT) gTxPower = WIFI_POWER_11dBm;   // only back off after a real power dip
 
   Serial.println("Step 2/4: checking for double reset (3 s)");
   bool forceSetup = checkDoubleReset();
@@ -861,7 +860,7 @@ void setup() {
 
   ledMode = LED_OK;
   printStatus();
-  remoteLog(String("boot ok on ") + BOARD_NAME + ", Wi-Fi " + WiFi.SSID() + " " + String(WiFi.RSSI()) + " dBm, reset reason " + resetReasonText + ", tx power " + String(gTxPower == WIFI_POWER_11dBm ? "11" : "15") + " dBm");
+  remoteLog(String("boot ok on ") + BOARD_NAME + ", Wi-Fi " + WiFi.SSID() + " " + String(WiFi.RSSI()) + " dBm, reset reason " + resetReasonText + ", tx power " + String((int)gTxPower / 4.0, 1) + " dBm");
 
   remoteLog(relayPolarityInfo);
 
@@ -918,7 +917,6 @@ void loop() {
     return;
   }
   offlineSince = 0;
-  if (!stableMarked && millis() > 120000UL) { prefs.putBool("stable", true); stableMarked = true; }
 
   // Every 6 hours, but only during game audio (never mid-commercial).
   if (millis() - lastUpdateCheck >= UPDATE_CHECK_MS && audioSource == AUDIO_TV) {
