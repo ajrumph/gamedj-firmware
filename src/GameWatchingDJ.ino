@@ -64,12 +64,12 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.5.7";
+const char* FIRMWARE_VERSION = "1.6.0";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
 // To move updates to Base44 later, ship one release that changes MANIFEST_BASE.
-const char* MANIFEST_BASE = "https://raw.githubusercontent.com/ajrumph/gamedj-firmware/main/";
+const char* MANIFEST_BASE = "https://raw.githubusercontent.com/ajrumph/gamedj-updates/main/";
 const unsigned long UPDATE_CHECK_MS = 6UL * 60 * 60 * 1000;   // every 6 hours
 
 // Remote diagnostics: short event messages (boot, audio switches, errors) go to
