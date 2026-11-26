@@ -64,7 +64,7 @@ const char* SNAPSHOT_URL = "https://score-sync-dj.base44.app/functions/analyzeFr
 // cycles relay pins 13, 14, 15 and 2 together (2 s on, 2 s off) and logs readbacks.
 // A normal power cycle re-checks for updates first, so it can be replaced by a normal release.
 #define PIN_TEST 0
-const char* FIRMWARE_VERSION = "1.6.0";
+const char* FIRMWARE_VERSION = "1.6.1";
 
 // Over-the-air updates. Each board reads <MANIFEST_BASE><board folder>/manifest.json:
 //   {"version":"1.3.1","url":"https://.../GameWatchingDJ-1.3.1.bin"}
@@ -589,10 +589,10 @@ bool initCamera() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn  = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+  config.xclk_freq_hz = 10000000;   // 10 MHz camera clock: less radio noise next to the Wi-Fi antenna
   config.pixel_format = PIXFORMAT_JPEG;
   config.frame_size   = FRAMESIZE_VGA;   // 640x480 is plenty for game-vs-commercial
-  config.jpeg_quality = 12;
+  config.jpeg_quality = 14;          // slightly smaller uploads, same 640x480 picture
   config.fb_count     = 2;
   config.fb_location  = CAMERA_FB_IN_PSRAM;
   config.grab_mode    = CAMERA_GRAB_LATEST; // always send the newest frame
@@ -690,6 +690,7 @@ static void liveTask(void*) {
 }
 
 // ========================= SNAPSHOTS =================================
+unsigned long uploadsOk = 0, uploadsFailed = 0, uploadsRetried = 0;   // since boot, reported to the app
 void handleFailure() {
   consecutiveFailures++;
   if (consecutiveFailures >= MAX_FAILURES_BEFORE_TV) {
@@ -722,11 +723,9 @@ void sendSnapshot() {
     return;
   }
 
-  if (!snapHttp.begin(tlsClient, SNAPSHOT_URL)) {
-    esp_camera_fb_return(fb);
-    handleFailure();
-    return;
-  }
+  int status = -1;
+  for (int attempt = 1; attempt <= 2; attempt++) {   // one quick retry on a dropped upload
+  if (!snapHttp.begin(tlsClient, SNAPSHOT_URL)) { status = -1; tlsClient.stop(); delay(250); continue; }
   snapHttp.addHeader("Content-Type", "image/jpeg");
   snapHttp.addHeader("X-Device-Id", deviceId);
   snapHttp.addHeader("X-Device-Token", deviceToken);
@@ -741,9 +740,16 @@ void sendSnapshot() {
   snapHttp.addHeader("X-Reset-Reason", resetReasonText);
   snapHttp.addHeader("X-Wifi-Drops", String(wifiDrops));
   snapHttp.addHeader("X-Uptime-S", String((unsigned long)(millis() / 1000)));
+  snapHttp.addHeader("X-Upload-Ok", String(uploadsOk));
+  snapHttp.addHeader("X-Upload-Failed", String(uploadsFailed));
+  snapHttp.addHeader("X-Upload-Retried", String(uploadsRetried));
 
   lastFrameLen = fb->len;
-  int status = snapHttp.POST(fb->buf, fb->len);
+  status = snapHttp.POST(fb->buf, fb->len);
+  if (status > 0) break;
+  snapHttp.end(); tlsClient.stop();
+  if (attempt == 1) { uploadsRetried++; delay(250); }
+  }
   esp_camera_fb_return(fb);
 
   if (status == 200) {
@@ -772,11 +778,13 @@ void sendSnapshot() {
       snapshotIntervalMs = 3000;
     }
     consecutiveFailures = 0;
+    uploadsOk++;
     ledMode = LED_OK;
     return;
   }
 
   snapHttp.end();
+  uploadsFailed++;
   if (status <= 0) tlsClient.stop();   // drop a dead kept-alive socket so the next try starts clean
   Serial.printf("Snapshot failed: HTTP %d\n", status);
   static unsigned long lastFailLog = 0;
